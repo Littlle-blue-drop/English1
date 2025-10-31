@@ -1,0 +1,16 @@
+import { NextResponse } from 'next/server';
+
+export async function POST() {
+  const response = NextResponse.json({
+    success: true,
+    message: '登出成功',
+  });
+
+  // 删除cookie
+  response.cookies.delete('auth-token');
+
+  return response;
+}
+
+
+
