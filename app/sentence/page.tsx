@@ -25,14 +25,21 @@ export default function SentencePage() {
   const [customSentence, setCustomSentence] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
   const [score, setScore] = useState<EvaluationScore | null>(null);
   const [error, setError] = useState<string>('');
   const [isSupported, setIsSupported] = useState(true);
+  const [processingMessage, setProcessingMessage] = useState('正在评测...');
+  const [evaluationStartTime, setEvaluationStartTime] = useState<number | null>(null);
+  const [hasResult, setHasResult] = useState(false);
+  const [elapsedTime, setElapsedTime] = useState(0);
 
   const recorderRef = useRef<AudioRecorder | null>(null);
   const clientRef = useRef<XFYunClient | null>(null);
   const audioChunksRef = useRef<ArrayBuffer[]>([]);
   const recordStartTimeRef = useRef<number>(0);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     // 检查浏览器支持
@@ -51,6 +58,12 @@ export default function SentencePage() {
     }
 
     return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
       if (recorderRef.current) {
         recorderRef.current.release();
       }
@@ -64,6 +77,9 @@ export default function SentencePage() {
     try {
       setError('');
       setScore(null);
+      setHasResult(false);
+      setIsInitializing(true);
+      setProcessingMessage('正在初始化...');
       recordStartTimeRef.current = Date.now();
 
       // 初始化录音器
@@ -87,25 +103,80 @@ export default function SentencePage() {
 
       // 监听评测结果
       clientRef.current.onMessage((result) => {
+        // 清除超时定时器
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+
         if (result.code !== 0) {
-          setError(`评测失败: ${result.message} (错误码: ${result.code})`);
+          const errorMsg = result.message || '未知错误';
+          setError(`评测失败: ${errorMsg} (错误码: ${result.code})`);
           setIsProcessing(false);
+          setProcessingMessage('正在评测...');
+          setEvaluationStartTime(null);
           return;
         }
 
-        if (result.data && result.data.status === 2) {
-          // 评测完成
-          const scoreData = XMLParser.parseResult(result.data.data);
-          if (scoreData) {
-            setScore(scoreData);
-            
-            // 🔄 自动保存练习记录到数据库
-            savePracticeRecord(scoreData);
-          } else {
-            setError('评测结果解析失败');
+        // 处理不同状态
+        if (result.data) {
+          if (result.data.status === 2) {
+            // 评测完成
+            const scoreData = XMLParser.parseResult(result.data.data);
+            if (scoreData) {
+              // 计算评测耗时
+              if (evaluationStartTime) {
+                const elapsed = ((Date.now() - evaluationStartTime) / 1000).toFixed(1);
+                console.log(`评测完成，耗时: ${elapsed}秒`);
+              }
+              
+              setScore(scoreData);
+              setHasResult(true);
+              
+              // 🔄 自动保存练习记录到数据库
+              savePracticeRecord(scoreData);
+            } else {
+              setError('评测结果解析失败，请重试');
+            }
+            setIsProcessing(false);
+            setProcessingMessage('正在评测...');
+            setEvaluationStartTime(null);
+            // 清除计时器
+            if (timerIntervalRef.current) {
+              clearInterval(timerIntervalRef.current);
+              timerIntervalRef.current = null;
+            }
+          } else if (result.data.status === 1) {
+            // 中间结果，更新提示
+            setProcessingMessage('正在分析音频数据...');
+            console.log('收到中间结果，继续处理...');
+          } else if (result.data.status === 0) {
+            // 初始状态
+            setProcessingMessage('正在接收评测结果...');
           }
-          setIsProcessing(false);
         }
+      });
+
+      // 监听WebSocket错误
+      clientRef.current.onError((error) => {
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+        setError(`连接错误: ${error}`);
+        setIsProcessing(false);
+        setProcessingMessage('正在评测...');
+        setEvaluationStartTime(null);
+        // 清除计时器
+        if (timerIntervalRef.current) {
+          clearInterval(timerIntervalRef.current);
+          timerIntervalRef.current = null;
+        }
+      });
+
+      // 监听WebSocket关闭
+      clientRef.current.onClose(() => {
+        console.log('WebSocket连接已关闭');
       });
 
       // 开始录音
@@ -122,8 +193,10 @@ export default function SentencePage() {
         }
       });
 
+      setIsInitializing(false);
       setIsRecording(true);
     } catch (err: any) {
+      setIsInitializing(false);
       const errorMsg = err?.message || err?.toString() || '未知错误';
       setError(`录音启动失败: ${errorMsg}`);
       console.error('录音启动详细错误:', err);
@@ -135,15 +208,58 @@ export default function SentencePage() {
 
     setIsRecording(false);
     setIsProcessing(true);
+    setProcessingMessage('正在上传音频...');
+    setEvaluationStartTime(Date.now());
+    setElapsedTime(0);
+    setHasResult(false);
 
     // 停止录音
-    recorderRef.current.stop();
+    const audioChunks = recorderRef.current.stop();
 
-    // 发送最后一帧
-    if (audioChunksRef.current.length > 0) {
-      const lastChunk = audioChunksRef.current[audioChunksRef.current.length - 1];
+    // 发送最后一帧（如果有音频数据，发送最后一块；否则发送空数据标记结束）
+    if (audioChunks.length > 0) {
+      const lastChunk = audioChunks[audioChunks.length - 1];
       clientRef.current.sendAudio(lastChunk, false, true);
+    } else {
+      // 如果没有录制到音频，发送空帧
+      const emptyBuffer = new ArrayBuffer(0);
+      clientRef.current.sendAudio(emptyBuffer, false, true);
     }
+
+    // 启动计时器（降低频率避免触发过多更新）
+    timerIntervalRef.current = setInterval(() => {
+      setElapsedTime((prev) => {
+        const newTime = prev + 0.5;
+        // 避免超过 30 秒
+        return newTime > 30 ? 30 : newTime;
+      });
+    }, 500);
+
+    // 更新提示（1秒后）
+    setTimeout(() => {
+      setProcessingMessage((prev) => {
+        if (prev === '正在上传音频...') {
+          return '正在评测中...';
+        }
+        return prev;
+      });
+    }, 1000);
+
+    // 设置超时（30秒）
+    timeoutRef.current = setTimeout(() => {
+      if (timeoutRef.current) {
+        setError('评测超时，可能是网络问题或服务器繁忙，请重试');
+        setIsProcessing(false);
+        setProcessingMessage('正在评测...');
+        setEvaluationStartTime(null);
+        setElapsedTime(0);
+        timeoutRef.current = null;
+        if (timerIntervalRef.current) {
+          clearInterval(timerIntervalRef.current);
+          timerIntervalRef.current = null;
+        }
+      }
+    }, 30000);
 
     // 释放资源
     recorderRef.current.release();
@@ -154,6 +270,18 @@ export default function SentencePage() {
     setCurrentSentence(sentence);
     setScore(null);
     setError('');
+    setHasResult(false);
+    // 如果正在评测，取消评测
+    if (isProcessing && timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+      setIsProcessing(false);
+      setProcessingMessage('正在评测...');
+      setEvaluationStartTime(null);
+      if (clientRef.current) {
+        clientRef.current.close();
+      }
+    }
   };
 
   const handleCustomSentenceSubmit = () => {
@@ -216,8 +344,24 @@ export default function SentencePage() {
 
         {/* 错误提示 */}
         {error && (
-          <div className="mb-6 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-            {error}
+          <div className="mb-6 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg flex items-center justify-between">
+            <div className="flex items-center">
+              <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+              <span>{error}</span>
+            </div>
+            {!isProcessing && (
+              <button
+                onClick={() => {
+                  setError('');
+                  handleStartRecord();
+                }}
+                className="ml-4 px-4 py-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors text-sm"
+              >
+                重试
+              </button>
+            )}
           </div>
         )}
 
@@ -268,20 +412,52 @@ export default function SentencePage() {
         </div>
 
         {/* 录音按钮 */}
-        <div className="bg-white rounded-lg shadow-lg p-8 mb-6 flex justify-center">
+        <div className="bg-white rounded-lg shadow-lg p-8 mb-6 flex flex-col items-center">
           <RecordButton
             isRecording={isRecording}
             isProcessing={isProcessing}
+            isInitializing={isInitializing}
             onStartRecord={handleStartRecord}
             onStopRecord={handleStopRecord}
             disabled={!isSupported}
+            processingMessage={processingMessage}
           />
+          {isProcessing && elapsedTime > 0 && (
+            <div className="mt-4 text-sm text-gray-500 animate-pulse">
+              评测耗时: {elapsedTime.toFixed(1)}秒
+            </div>
+          )}
         </div>
 
         {/* 评分展示 */}
         {score && (
-          <div className="mb-6">
+          <div className="mb-6 animate-fade-in">
             <ScoreDisplay score={score} showDetails={true} />
+            {hasResult && (
+              <div className="mt-4 flex justify-center gap-4">
+                <button
+                  onClick={() => {
+                    setScore(null);
+                    setHasResult(false);
+                    setError('');
+                    handleStartRecord();
+                  }}
+                  className="px-6 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
+                >
+                  再次练习
+                </button>
+                <button
+                  onClick={() => {
+                    setScore(null);
+                    setHasResult(false);
+                    setError('');
+                  }}
+                  className="px-6 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
+                >
+                  清除结果
+                </button>
+              </div>
+            )}
           </div>
         )}
 

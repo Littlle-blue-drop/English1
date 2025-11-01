@@ -29,6 +29,8 @@ export class XFYunClient {
   private ws: WebSocket | null = null;
   private audioQueue: ArrayBuffer[] = [];
   private isConnected = false;
+  private onErrorCallback?: (error: string) => void;
+  private onCloseCallback?: () => void;
 
   constructor(config: XFYunConfig) {
     this.config = config;
@@ -105,7 +107,18 @@ export class XFYunClient {
       this.ws.onclose = (event) => {
         console.log('WebSocket关闭:', event.code, event.reason);
         this.isConnected = false;
+        if (this.onCloseCallback) {
+          this.onCloseCallback();
+        }
       };
+
+      // 设置连接超时
+      setTimeout(() => {
+        if (!this.isConnected && this.ws?.readyState === WebSocket.CONNECTING) {
+          this.ws.close();
+          reject(new Error('WebSocket连接超时'));
+        }
+      }, 10000); // 10秒超时
     });
   }
 
@@ -138,11 +151,28 @@ export class XFYunClient {
   onMessage(callback: (result: EvaluationResult) => void): void {
     if (this.ws) {
       this.ws.onmessage = (event) => {
-        const result: EvaluationResult = JSON.parse(event.data);
-        console.log('收到评测结果:', result);
-        callback(result);
+        try {
+          const result: EvaluationResult = JSON.parse(event.data);
+          console.log('收到评测结果:', result);
+          callback(result);
+        } catch (error) {
+          console.error('解析评测结果失败:', error);
+          if (this.onErrorCallback) {
+            this.onErrorCallback('解析评测结果失败');
+          }
+        }
       };
     }
+  }
+
+  // 设置错误回调
+  onError(callback: (error: string) => void): void {
+    this.onErrorCallback = callback;
+  }
+
+  // 设置关闭回调
+  onClose(callback: () => void): void {
+    this.onCloseCallback = callback;
   }
 
   // 关闭连接

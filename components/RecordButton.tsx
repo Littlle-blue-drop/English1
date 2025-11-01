@@ -3,23 +3,27 @@ import React, { useState } from 'react';
 interface RecordButtonProps {
   isRecording: boolean;
   isProcessing: boolean;
+  isInitializing?: boolean;
   onStartRecord: () => void;
   onStopRecord: () => void;
   disabled?: boolean;
+  processingMessage?: string;
 }
 
 export const RecordButton: React.FC<RecordButtonProps> = ({
   isRecording,
   isProcessing,
+  isInitializing = false,
   onStartRecord,
   onStopRecord,
   disabled = false,
+  processingMessage,
 }) => {
   return (
     <div className="flex flex-col items-center space-y-4">
       <button
         onClick={isRecording ? onStopRecord : onStartRecord}
-        disabled={disabled || isProcessing}
+        disabled={disabled || isProcessing || isInitializing}
         className={`
           relative w-20 h-20 rounded-full flex items-center justify-center
           transition-all duration-300 transform hover:scale-110
@@ -27,10 +31,12 @@ export const RecordButton: React.FC<RecordButtonProps> = ({
             ? 'bg-red-500 hover:bg-red-600 animate-pulse'
             : 'bg-blue-500 hover:bg-blue-600'
           }
-          ${(disabled || isProcessing) ? 'opacity-50 cursor-not-allowed' : 'shadow-lg'}
+          ${(disabled || isProcessing || isInitializing) ? 'opacity-50 cursor-not-allowed' : 'shadow-lg'}
         `}
       >
-        {isProcessing ? (
+        {isInitializing ? (
+          <div className="w-8 h-8 border-4 border-white border-t-transparent rounded-full animate-spin" />
+        ) : isProcessing ? (
           <div className="w-8 h-8 border-4 border-white border-t-transparent rounded-full animate-spin" />
         ) : isRecording ? (
           <div className="w-6 h-6 bg-white rounded" />
@@ -51,8 +57,10 @@ export const RecordButton: React.FC<RecordButtonProps> = ({
       
       <div className="text-center">
         <p className="text-sm font-medium text-gray-700">
-          {isProcessing
-            ? '正在评测...'
+          {isInitializing
+            ? '正在初始化...'
+            : isProcessing
+            ? processingMessage || '正在评测...'
             : isRecording
             ? '点击停止录音'
             : '点击开始录音'
@@ -61,6 +69,11 @@ export const RecordButton: React.FC<RecordButtonProps> = ({
         {isRecording && (
           <p className="text-xs text-gray-500 mt-1">
             <RecordingTimer />
+          </p>
+        )}
+        {isProcessing && !isRecording && (
+          <p className="text-xs text-gray-500 mt-1 animate-pulse">
+            请稍候，正在处理中...
           </p>
         )}
       </div>

@@ -6,7 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop voice-evaluation-app",
+    "pm2:restart": "pm2 restart voice-evaluation-app",
+    "pm2:logs": "pm2 logs voice-evaluation-app",
+    "pm2:status": "pm2 status"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.76.1",

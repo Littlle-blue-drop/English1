@@ -27,6 +27,7 @@ export default function WordPage() {
   const [customWord, setCustomWord] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
   const [score, setScore] = useState<EvaluationScore | null>(null);
   const [error, setError] = useState<string>('');
   const [isSupported, setIsSupported] = useState(true);
@@ -35,6 +36,7 @@ export default function WordPage() {
   const clientRef = useRef<XFYunClient | null>(null);
   const audioChunksRef = useRef<ArrayBuffer[]>([]);
   const recordStartTimeRef = useRef<number>(0);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     // 检查浏览器支持
@@ -53,6 +55,9 @@ export default function WordPage() {
     }
 
     return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
       if (recorderRef.current) {
         recorderRef.current.release();
       }
@@ -66,6 +71,7 @@ export default function WordPage() {
     try {
       setError('');
       setScore(null);
+      setIsInitializing(true);
       recordStartTimeRef.current = Date.now();
 
       // 初始化录音器
@@ -89,25 +95,52 @@ export default function WordPage() {
 
       // 监听评测结果
       clientRef.current.onMessage((result) => {
+        // 清除超时定时器
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+
         if (result.code !== 0) {
           setError(`评测失败: ${result.message} (错误码: ${result.code})`);
           setIsProcessing(false);
           return;
         }
 
-        if (result.data && result.data.status === 2) {
-          // 评测完成
-          const scoreData = XMLParser.parseResult(result.data.data);
-          if (scoreData) {
-            setScore(scoreData);
-            
-            // 🔄 自动保存练习记录到数据库
-            savePracticeRecord(scoreData);
-          } else {
-            setError('评测结果解析失败');
+        // 处理不同状态
+        if (result.data) {
+          if (result.data.status === 2) {
+            // 评测完成
+            const scoreData = XMLParser.parseResult(result.data.data);
+            if (scoreData) {
+              setScore(scoreData);
+              
+              // 🔄 自动保存练习记录到数据库
+              savePracticeRecord(scoreData);
+            } else {
+              setError('评测结果解析失败');
+            }
+            setIsProcessing(false);
+          } else if (result.data.status === 1) {
+            // 中间结果，继续等待
+            console.log('收到中间结果，继续等待...');
           }
-          setIsProcessing(false);
         }
+      });
+
+      // 监听WebSocket错误
+      clientRef.current.onError((error) => {
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+        setError(`连接错误: ${error}`);
+        setIsProcessing(false);
+      });
+
+      // 监听WebSocket关闭
+      clientRef.current.onClose(() => {
+        console.log('WebSocket连接已关闭');
       });
 
       // 开始录音
@@ -124,8 +157,10 @@ export default function WordPage() {
         }
       });
 
+      setIsInitializing(false);
       setIsRecording(true);
     } catch (err: any) {
+      setIsInitializing(false);
       const errorMsg = err?.message || err?.toString() || '未知错误';
       setError(`录音启动失败: ${errorMsg}`);
       console.error('录音启动详细错误:', err);
@@ -139,13 +174,26 @@ export default function WordPage() {
     setIsProcessing(true);
 
     // 停止录音
-    recorderRef.current.stop();
+    const audioChunks = recorderRef.current.stop();
 
-    // 发送最后一帧
-    if (audioChunksRef.current.length > 0) {
-      const lastChunk = audioChunksRef.current[audioChunksRef.current.length - 1];
+    // 发送最后一帧（如果有音频数据，发送最后一块；否则发送空数据标记结束）
+    if (audioChunks.length > 0) {
+      const lastChunk = audioChunks[audioChunks.length - 1];
       clientRef.current.sendAudio(lastChunk, false, true);
+    } else {
+      // 如果没有录制到音频，发送空帧
+      const emptyBuffer = new ArrayBuffer(0);
+      clientRef.current.sendAudio(emptyBuffer, false, true);
     }
+
+    // 设置超时（30秒）
+    timeoutRef.current = setTimeout(() => {
+      if (timeoutRef.current) {
+        setError('评测超时，请重试');
+        setIsProcessing(false);
+        timeoutRef.current = null;
+      }
+    }, 30000);
 
     // 释放资源
     recorderRef.current.release();
@@ -274,6 +322,7 @@ export default function WordPage() {
           <RecordButton
             isRecording={isRecording}
             isProcessing={isProcessing}
+            isInitializing={isInitializing}
             onStartRecord={handleStartRecord}
             onStopRecord={handleStopRecord}
             disabled={!isSupported}

@@ -137,6 +137,77 @@ Settings → Environment Variables
 - `NEXT_PUBLIC_XFYUN_API_KEY`
 - `NEXT_PUBLIC_XFYUN_API_SECRET`
 
+## 🖥️ 部署到阿里云服务器
+
+### 前置要求
+- 阿里云ECS服务器（推荐：2核4G，Ubuntu 20.04/22.04）
+- 域名（已备案）
+- SSL证书（Let's Encrypt或阿里云SSL证书）
+- Supabase项目已配置
+
+### 快速部署
+
+1. **上传代码到服务器**
+   ```bash
+   # 方法1: 使用Git
+   git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git /var/www/voice-evaluation
+   
+   # 方法2: 使用SCP
+   scp -r ./voice-evaluation-mvp/* root@your-server-ip:/var/www/voice-evaluation/
+   ```
+
+2. **配置环境变量**
+   ```bash
+   cd /var/www/voice-evaluation
+   cp env.production.example .env.production
+   nano .env.production  # 填入实际值
+   ```
+
+3. **安装依赖并构建**
+   ```bash
+   npm ci --production=false
+   npm run build
+   ```
+
+4. **使用PM2启动**
+   ```bash
+   pm2 start ecosystem.config.js
+   pm2 save
+   pm2 startup  # 按提示执行输出命令
+   ```
+
+5. **配置Nginx反向代理**
+   ```bash
+   cp nginx.conf /etc/nginx/sites-available/voice-evaluation
+   # 编辑配置文件，修改域名和SSL证书路径
+   ln -s /etc/nginx/sites-available/voice-evaluation /etc/nginx/sites-enabled/
+   nginx -t
+   systemctl reload nginx
+   ```
+
+6. **配置SSL证书**
+   ```bash
+   # 使用Let's Encrypt
+   certbot --nginx -d your-domain.com -d www.your-domain.com
+   ```
+
+**详细文档：** 查看 [`阿里云部署指南.md`](./阿里云部署指南.md)  
+**快速参考：** 查看 [`阿里云部署快速参考.md`](./阿里云部署快速参考.md)
+
+### 使用Docker部署（可选）
+
+```bash
+# 构建镜像
+docker build -t voice-evaluation-app .
+
+# 运行容器
+docker run -d \
+  -p 3000:3000 \
+  --env-file .env.production \
+  --name voice-evaluation \
+  voice-evaluation-app
+```
+
 ## 🏗️ 项目结构
 
 ```
