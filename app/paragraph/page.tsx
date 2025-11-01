@@ -226,17 +226,14 @@ export default function ParagraphPage() {
     setHasResult(false);
 
     // 停止录音
-    const audioChunks = recorderRef.current.stop();
+    recorderRef.current.stop();
 
-    // 发送最后一帧（如果有音频数据，发送最后一块；否则发送空数据标记结束）
-    if (audioChunks.length > 0) {
-      const lastChunk = audioChunks[audioChunks.length - 1];
-      clientRef.current.sendAudio(lastChunk, false, true);
-    } else {
-      // 如果没有录制到音频，发送空帧
-      const emptyBuffer = new ArrayBuffer(0);
-      clientRef.current.sendAudio(emptyBuffer, false, true);
-    }
+    // 发送结束帧（空数据 + isLast=true）
+    // 注意：音频数据已经在录音过程中实时发送，这里只需要标记结束
+    const emptyBuffer = new ArrayBuffer(0);
+    clientRef.current.sendAudio(emptyBuffer, false, true);
+
+    console.log('发送结束帧，等待评测结果');
 
     // 启动计时器（降低频率避免触发过多更新）
     timerIntervalRef.current = setInterval(() => {
