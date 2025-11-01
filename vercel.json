@@ -3,11 +3,6 @@
   "devCommand": "npm run dev",
   "installCommand": "npm install",
   "framework": "nextjs",
-  "regions": ["sin1"],
-  "env": {
-    "NEXT_PUBLIC_XFYUN_APP_ID": "@xfyun_app_id",
-    "NEXT_PUBLIC_XFYUN_API_KEY": "@xfyun_api_key",
-    "NEXT_PUBLIC_XFYUN_API_SECRET": "@xfyun_api_secret"
-  }
+  "regions": ["sin1"]
 }
 
